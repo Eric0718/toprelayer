@@ -1,7 +1,6 @@
 package relayer
 
 import (
-	"context"
 	"sync"
 	"time"
 
@@ -11,11 +10,9 @@ import (
 )
 
 type HeaderSyncHandler struct {
-	ctx      context.Context
 	wg       *sync.WaitGroup
 	relayers map[uint64]IChainRelayer
-
-	conf *config.HeaderSyncConfig
+	conf     *config.HeaderSyncConfig
 }
 
 func NewHeaderSyncHandler(config *config.HeaderSyncConfig) *HeaderSyncHandler {
@@ -23,7 +20,7 @@ func NewHeaderSyncHandler(config *config.HeaderSyncConfig) *HeaderSyncHandler {
 	relayers := make(map[uint64]IChainRelayer)
 
 	for _, chain := range config.Config.Chains {
-		relayers[chain.ChainId_to] = GetRelayer(chain.ChainId_to)
+		relayers[chain.SubmitChainId] = GetRelayer(chain.SubmitChainId)
 	}
 	handler.relayers = relayers
 	handler.conf = config
@@ -34,15 +31,16 @@ func NewHeaderSyncHandler(config *config.HeaderSyncConfig) *HeaderSyncHandler {
 func (h *HeaderSyncHandler) Init(wg *sync.WaitGroup, chainpass map[uint64]string) (err error) {
 	h.wg = wg
 	for _, chain := range h.conf.Config.Chains {
-		err = h.relayers[chain.ChainId_to].Init(
-			chain.SubmitNode,
-			chain.ListenNode,
+		err = h.relayers[chain.SubmitChainId].Init(
+			chain.SubmitUrl,
+			chain.ListenUrl,
 			chain.KeyPath,
-			chainpass[chain.ChainId_to],
-			chain.ChainId_to,
+			chainpass[chain.SubmitChainId],
+			chain.SubmitChainId,
 			common.HexToAddress(chain.Contract),
 			chain.BlockCertainty,
 			chain.SubBatch,
+			chain.VerifyBlock,
 		)
 		if err != nil {
 			return err
@@ -52,10 +50,10 @@ func (h *HeaderSyncHandler) Init(wg *sync.WaitGroup, chainpass map[uint64]string
 }
 
 func (h *HeaderSyncHandler) StartRelayer() (err error) {
+	h.wg.Add(len(h.conf.Config.Chains))
 	for _, chain := range h.conf.Config.Chains {
-		h.wg.Add(1)
 		go func() {
-			err = h.relayers[chain.ChainId_to].StartSubmitting(h.wg)
+			err = h.relayers[chain.SubmitChainId].StartRelayer(h.wg)
 		}()
 		if err != nil {
 			return err

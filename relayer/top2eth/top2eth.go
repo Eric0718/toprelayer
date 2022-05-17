@@ -14,6 +14,7 @@ import (
 	"toprelayer/util"
 	"toprelayer/wallet"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -21,23 +22,24 @@ import (
 )
 
 const (
-	METHOD_GETCURRENTBLOCKHEIGHT       = "getCurrentBlockHeight"
-	SUBMITINTERVAL               int64 = 1000
-	ERRDELAY                     int64 = 18
+	METHOD_GETCURRENTBLOCKHEIGHT        = "getCurrentBlockHeight"
+	SUBMITINTERVAL               int64  = 1000
+	ERRDELAY                     int64  = 18
+	CONFIRMSUCCESS               string = "0x1"
 )
 
-type Top2Eth struct {
+type Top2EthRelayer struct {
 	context.Context
 	contract        common.Address
 	chainId         uint64
-	wallet          wallet.IWallet_ETH
+	wallet          wallet.IWallet
 	ethsdk          *ethsdk.EthSdk
 	topsdk          *topsdk.TopSdk
 	certaintyBlocks int
 	subBatch        int
 }
 
-func (te *Top2Eth) Init(ethUrl, topUrl, keypath, pass string, chainid uint64, contract common.Address, batch, cert int) error {
+func (te *Top2EthRelayer) Init(ethUrl, topUrl, keypath, pass string, chainid uint64, contract common.Address, batch, cert int, verify bool) error {
 	ethsdk, err := ethsdk.NewEthSdk(ethUrl)
 	if err != nil {
 		return err
@@ -57,43 +59,42 @@ func (te *Top2Eth) Init(ethUrl, topUrl, keypath, pass string, chainid uint64, co
 	if err != nil {
 		return err
 	}
-	te.wallet = w.(wallet.IWallet_ETH)
+	te.wallet = w
 	return nil
 }
 
-func (te *Top2Eth) ChainId() uint64 {
+func (te *Top2EthRelayer) ChainId() uint64 {
 	return te.chainId
 }
 
-func (te *Top2Eth) submitTopHeader(headers []byte, nonce uint64) (*types.Transaction, error) {
+func (te *Top2EthRelayer) submitTopHeader(headers []byte, nonce uint64) (*types.Transaction, error) {
 	logger.Info("submitHeader header length:%v,chainid:%v", len(headers), te.chainId)
 	gaspric, err := te.wallet.GasPrice(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	/* msg := ethereum.CallMsg{
+	msg := ethereum.CallMsg{
 		From:     te.wallet.CurrentAccount().Address,
 		To:       &te.contract,
 		GasPrice: gaspric,
 		Value:    big.NewInt(0),
-		Data:     header,
+		Data:     headers,
 	}
 
 	gaslimit, err := te.wallet.EstimateGas(context.Background(), msg)
 	if err != nil {
 		fmt.Println("EstimateGas error:", err)
-		return "", err
+		return nil, err
 	}
-	*/
 
 	//test mock
-	gaslimit := uint64(300000)
+	//gaslimit := uint64(300000)
 
 	balance, err := te.wallet.GetBalance()
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("EthSubmitter debug: account balance:%v", balance.Uint64())
+
 	if balance.Uint64() <= gaspric.Uint64()*gaslimit {
 		return nil, fmt.Errorf("account not sufficient funds,balance:%v", balance.Uint64())
 	}
@@ -102,7 +103,7 @@ func (te *Top2Eth) submitTopHeader(headers []byte, nonce uint64) (*types.Transac
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("account balance:%v", balance.Uint64())
+	logger.Info("account balance:%v,gasprice:%v,gaslimit:%v", balance.Uint64(), gaspric.Uint64(), gaslimit)
 	if balance.Uint64() <= gaspric.Uint64()*gaslimit {
 		return nil, fmt.Errorf("account[%v] not sufficient funds,balance:%v", te.wallet.CurrentAccount().Address, balance.Uint64())
 	}
@@ -147,7 +148,7 @@ func (te *Top2Eth) submitTopHeader(headers []byte, nonce uint64) (*types.Transac
 }
 
 //callback function to sign tx before send.
-func (te *Top2Eth) signTransaction(addr common.Address, tx *types.Transaction) (*types.Transaction, error) {
+func (te *Top2EthRelayer) signTransaction(addr common.Address, tx *types.Transaction) (*types.Transaction, error) {
 	acc := te.wallet.CurrentAccount()
 	if strings.EqualFold(acc.Address.Hex(), addr.Hex()) {
 		stx, err := te.wallet.SignTx(tx)
@@ -159,37 +160,45 @@ func (te *Top2Eth) signTransaction(addr common.Address, tx *types.Transaction) (
 	return nil, fmt.Errorf("address:%v not available", addr)
 }
 
-func (te *Top2Eth) getContractLatestsyncedHeight() (uint64, error) {
+func (te *Top2EthRelayer) getTopBridgeState() (*msg.BridgeState, error) {
 	hscaller, err := hsc.NewHscCaller(te.contract, te.ethsdk)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	hscRaw := hsc.HscCallerRaw{Contract: hscaller}
 	result := make([]interface{}, 1)
 	err = hscRaw.Call(nil, &result, METHOD_GETCURRENTBLOCKHEIGHT, te.chainId)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	h, success := result[0].(uint64)
+	state, success := result[0].(msg.BridgeState)
 	if !success {
-		return 0, fmt.Errorf("fail to convert error")
+		return nil, err
 	}
 
-	return h, nil
+	return &state, nil
 }
 
-func (te *Top2Eth) StartSubmitting(wg *sync.WaitGroup) error {
-	logger.Info("Start Top2Eth relayer... chainid:%v", te.chainId)
+func (te *Top2EthRelayer) StartRelayer(wg *sync.WaitGroup) error {
+	logger.Info("Start Top2EthRelayer relayer... chainid:%v", te.chainId)
 	defer wg.Done()
 
 	var submitDelay int64 = 1
+	var syncStartHeight uint64 = 0
 	for {
-		bridgeLatestSyncedHeight, err := te.getContractLatestsyncedHeight()
+		bridgeState, err := te.getTopBridgeState()
 		if err != nil {
 			logger.Error(err)
 			return err
+		}
+
+		if bridgeState.ConfirmState == CONFIRMSUCCESS {
+			syncStartHeight = bridgeState.LatestSyncedHeight.Uint64() + 1
+		} else {
+			logger.Warn("eth bridge confirm top header failed,height:%v.", bridgeState.LatestConfirmedHeight.Uint64()+1)
+			syncStartHeight = bridgeState.LatestConfirmedHeight.Uint64()
 		}
 
 		topCurrentHeight, err := te.topsdk.GetLatestTopElectBlockHeight()
@@ -197,10 +206,10 @@ func (te *Top2Eth) StartSubmitting(wg *sync.WaitGroup) error {
 			logger.Error(err)
 			return err
 		}
-
 		chainConfirmedBlockHeight := topCurrentHeight - 2 - uint64(te.certaintyBlocks)
-		if bridgeLatestSyncedHeight+1 <= chainConfirmedBlockHeight {
-			hashes, err := te.signAndSendTransactions(bridgeLatestSyncedHeight+1, chainConfirmedBlockHeight)
+
+		if syncStartHeight <= chainConfirmedBlockHeight {
+			hashes, err := te.signAndSendTransactions(syncStartHeight, chainConfirmedBlockHeight)
 			if len(hashes) > 0 {
 				logger.Info("sent hashes:", hashes)
 				submitDelay = int64(len(hashes))
@@ -212,11 +221,12 @@ func (te *Top2Eth) StartSubmitting(wg *sync.WaitGroup) error {
 		} else {
 			submitDelay = 1
 		}
-		time.Sleep(time.Second * time.Duration(SUBMITINTERVAL*submitDelay))
+		//time.Sleep(time.Second * time.Duration(SUBMITINTERVAL*submitDelay))
+		time.Sleep(time.Second * 2)
 	}
 }
 
-func (te *Top2Eth) batch(headers []*msg.TopElectBlockHeader, nonce uint64) (common.Hash, error) {
+func (te *Top2EthRelayer) batch(headers []*msg.TopElectBlockHeader, nonce uint64) (common.Hash, error) {
 	data, err := msg.EncodeHeaders(headers)
 	if err != nil {
 		logger.Error("RlpEncodeHeaders failed:", err)
@@ -231,7 +241,7 @@ func (te *Top2Eth) batch(headers []*msg.TopElectBlockHeader, nonce uint64) (comm
 	return tx.Hash(), nil
 }
 
-func (te *Top2Eth) signAndSendTransactions(lo, hi uint64) ([]common.Hash, error) {
+func (te *Top2EthRelayer) signAndSendTransactions(lo, hi uint64) ([]common.Hash, error) {
 	var batchHeaders []*msg.TopElectBlockHeader
 	var hashes []common.Hash
 	nonce, err := te.wallet.GetNonce(te.wallet.CurrentAccount().Address)

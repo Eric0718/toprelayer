@@ -21,23 +21,25 @@ import (
 )
 
 const (
-	METHOD_GETCURRENTBLOCKHEIGHT       = "getCurrentBlockHeight"
-	SUBMITINTERVAL               int64 = 1000
-	ERRDELAY                     int64 = 18
+	METHOD_GETBRIDGESTATE        = "getbridgestate"
+	SUBMITINTERVAL        int64  = 1000
+	ERRDELAY              int64  = 18
+	CONFIRMSUCCESS        string = "0x1"
 )
 
-type Eth2Top struct {
+type Eth2TopRelayer struct {
 	context.Context
 	contract        common.Address
 	chainId         uint64
-	wallet          wallet.IWallet_TOP
+	wallet          wallet.IWallet
 	topsdk          *topsdk.TopSdk
 	ethsdk          *ethsdk.EthSdk
 	certaintyBlocks int
 	subBatch        int
+	verifyBlock     bool
 }
 
-func (et *Eth2Top) Init(topUrl, ethUrl, keypath, pass string, chainid uint64, contract common.Address, batch, cert int) error {
+func (et *Eth2TopRelayer) Init(topUrl, ethUrl, keypath, pass string, chainid uint64, contract common.Address, batch, cert int, verify bool) error {
 	topsdk, err := topsdk.NewTopSdk(topUrl)
 	if err != nil {
 		return err
@@ -53,19 +55,20 @@ func (et *Eth2Top) Init(topUrl, ethUrl, keypath, pass string, chainid uint64, co
 	et.chainId = chainid
 	et.subBatch = batch
 	et.certaintyBlocks = cert
+	et.verifyBlock = verify
 
 	w, err := wallet.NewWallet(topUrl, keypath, pass, chainid)
 	if err != nil {
 		return err
 	}
-	et.wallet = w.(wallet.IWallet_TOP)
+	et.wallet = w
 	return nil
 }
-func (et *Eth2Top) ChainId() uint64 {
+func (et *Eth2TopRelayer) ChainId() uint64 {
 	return et.chainId
 }
 
-func (et *Eth2Top) submitEthHeader(header []byte, nonce uint64) (*types.Transaction, error) {
+func (et *Eth2TopRelayer) submitEthHeader(header []byte, nonce uint64) (*types.Transaction, error) {
 	logger.Debug("submitEthHeader header length:%v,chainid:%v", len(header), et.chainId)
 	gaspric, err := et.wallet.GasPrice(context.Background())
 	if err != nil {
@@ -92,7 +95,7 @@ func (et *Eth2Top) submitEthHeader(header []byte, nonce uint64) (*types.Transact
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("EthSubmitter debug: account balance:%v", balance.Uint64())
+
 	if balance.Uint64() <= gaspric.Uint64()*gaslimit {
 		return nil, fmt.Errorf("account not sufficient funds,balance:%v", balance.Uint64())
 	} */
@@ -136,7 +139,7 @@ func (et *Eth2Top) submitEthHeader(header []byte, nonce uint64) (*types.Transact
 }
 
 //callback function to sign tx before send.
-func (et *Eth2Top) signTransaction(addr common.Address, tx *types.Transaction) (*types.Transaction, error) {
+func (et *Eth2TopRelayer) signTransaction(addr common.Address, tx *types.Transaction) (*types.Transaction, error) {
 	acc := et.wallet.CurrentAccount()
 	if strings.EqualFold(acc.Address.Hex(), addr.Hex()) {
 		stx, err := et.wallet.SignTx(tx)
@@ -148,51 +151,56 @@ func (et *Eth2Top) signTransaction(addr common.Address, tx *types.Transaction) (
 	return nil, fmt.Errorf("address:%v not available", addr)
 }
 
-func (et *Eth2Top) getContractLatestsyncedHeight() (uint64, error) {
+func (et *Eth2TopRelayer) getTopBridgeState() (*msg.BridgeState, error) {
 	hscaller, err := bridge.NewBridgeCaller(et.contract, et.topsdk)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	hscRaw := bridge.BridgeCallerRaw{Contract: hscaller}
 	result := make([]interface{}, 1)
-	err = hscRaw.Call(nil, &result, METHOD_GETCURRENTBLOCKHEIGHT, et.chainId)
+
+	err = hscRaw.Call(nil, &result, METHOD_GETBRIDGESTATE, et.chainId)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-
-	h, success := result[0].(uint64)
+	state, success := result[0].(msg.BridgeState)
 	if !success {
-		return 0, fmt.Errorf("fail to convert error")
+		return nil, err
 	}
-
-	return h, nil
+	return &state, nil
 }
 
-func (et *Eth2Top) StartSubmitting(wg *sync.WaitGroup) error {
+func (et *Eth2TopRelayer) StartRelayer(wg *sync.WaitGroup) error {
 	logger.Info("Start Eth2Toprelayer... chainid:%v", et.chainId)
 	defer wg.Done()
 
 	var submitDelay int64 = 1
 
 	//test mock
-	var bridgeLatestSyncedHeight uint64 = 0
+	var syncStartHeight uint64 = 0
 	for {
-		// bridgeLatestSyncedHeight, err := et.getContractLatestsyncedHeight()
-		// if err != nil {
-		// 	logger.Error(err)
-		// 	return err
-		// }
+		bridgeState, err := et.getTopBridgeState()
+		if err != nil {
+			logger.Error(err)
+			return err
+		}
+		if bridgeState.ConfirmState == CONFIRMSUCCESS {
+			syncStartHeight = bridgeState.LatestSyncedHeight.Uint64() + 1
+		} else {
+			logger.Warn("top bridge confirm eth header failed,height:%v.", bridgeState.LatestConfirmedHeight.Uint64())
+			syncStartHeight = bridgeState.LatestConfirmedHeight.Uint64()
+		}
 
 		ethCurrentHeight, err := et.ethsdk.BlockNumber(context.Background())
 		if err != nil {
 			logger.Error(err)
 			return err
 		}
-
 		chainConfirmedBlockHeight := ethCurrentHeight - uint64(et.certaintyBlocks)
-		if bridgeLatestSyncedHeight+1 <= chainConfirmedBlockHeight {
-			hashes, err := et.signAndSendTransactions(bridgeLatestSyncedHeight+1, chainConfirmedBlockHeight)
+
+		if syncStartHeight <= chainConfirmedBlockHeight {
+			hashes, err := et.signAndSendTransactions(syncStartHeight, chainConfirmedBlockHeight)
 			if len(hashes) > 0 {
 				logger.Info("sent hashes:", hashes)
 				submitDelay = int64(len(hashes))
@@ -205,11 +213,16 @@ func (et *Eth2Top) StartSubmitting(wg *sync.WaitGroup) error {
 			submitDelay = 1
 		}
 		//time.Sleep(time.Second * time.Duration(SUBMITINTERVAL*submitDelay))
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Second * 5)
 	}
 }
 
-func (et *Eth2Top) batch(headers []*types.Header, nonce uint64) (common.Hash, error) {
+func (et *Eth2TopRelayer) batch(headers []*types.Header, nonce uint64) (common.Hash, error) {
+	if et.verifyBlock {
+		for _, header := range headers {
+			et.verifyBlocks(header)
+		}
+	}
 	data, err := msg.EncodeHeaders(headers)
 	if err != nil {
 		logger.Error("RlpEncodeHeaders failed:", err)
@@ -223,7 +236,7 @@ func (et *Eth2Top) batch(headers []*types.Header, nonce uint64) (common.Hash, er
 	return tx.Hash(), nil
 }
 
-func (et *Eth2Top) signAndSendTransactions(lo, hi uint64) ([]common.Hash, error) {
+func (et *Eth2TopRelayer) signAndSendTransactions(lo, hi uint64) ([]common.Hash, error) {
 	var batchHeaders []*types.Header
 	var hashes []common.Hash
 	nonce, err := et.wallet.GetNonce(et.wallet.CurrentAccount().Address)
@@ -264,4 +277,8 @@ func (et *Eth2Top) signAndSendTransactions(lo, hi uint64) ([]common.Hash, error)
 		}
 	}
 	return hashes, nil
+}
+
+func (et *Eth2TopRelayer) verifyBlocks(header *types.Header) error {
+	return nil
 }

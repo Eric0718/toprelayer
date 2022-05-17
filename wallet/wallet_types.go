@@ -26,7 +26,7 @@ type Wallet struct {
 }
 
 //basic interface
-type BaseWallet interface {
+type IWallet interface {
 	GetBalance() (balance *big.Int, err error)
 	CurrentAccount() accounts.Account
 	GetNonce(address common.Address) (uint64, error)
@@ -38,17 +38,3 @@ type BaseWallet interface {
 	SignTx(tx *types.Transaction) (signedTx *types.Transaction, err error)
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
 }
-
-/*ETH wallet interface*/
-type IWallet_ETH interface {
-	//basic interface
-	BaseWallet
-}
-
-/*TOP wallet interface*/
-type IWallet_TOP interface {
-	//basic interface
-	BaseWallet
-}
-
-//to define more chains interface...

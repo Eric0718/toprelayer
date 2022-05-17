@@ -49,17 +49,17 @@ func newConfig(path string) (*Config, error) {
 
 type ChainsConfig struct {
 	//listen config
-	ChainId_from   uint64 `json:"chainidFrom"`
-	ListenNode     string `json:"listennode"`
-	ListenInterval int64  `json:"listeninterval"`
+	ListenChainId uint64 `json:"listenchainid"`
+	ListenUrl     string `json:"listenurl"`
 
 	//submit config
-	ChainId_to     uint64 `json:"chainidTo"`
-	SubmitNode     string `json:"submitnode"`
+	SubmitChainId  uint64 `json:"submitchainid"`
+	SubmitUrl      string `json:"submiturl"`
 	Contract       string `json:"contract"`
 	KeyPath        string `json:"keypath"`
 	BlockCertainty int    `json:"blockcertainty"`
 	SubBatch       int    `json:"subBatch"`
+	VerifyBlock    bool   `json:"verifyblock"`
 }
 
 type HeaderSyncConfig struct {

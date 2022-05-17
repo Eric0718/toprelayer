@@ -17,7 +17,7 @@ func main() {
 
 	app := &cli.App{
 		Name:   "xrelayer",
-		Usage:  "cross chain relayer",
+		Usage:  "block chain relayer",
 		Action: start,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -28,12 +28,12 @@ func main() {
 			&cli.StringFlag{
 				Name:  "ethpass",
 				Value: "",
-				Usage: "eth relayer keystore pass word,default NULL.",
+				Usage: "eth relayer keystore pass word",
 			},
 			&cli.StringFlag{
 				Name:  "toppass",
 				Value: "",
-				Usage: "top relayer keystore pass word,default NULL.",
+				Usage: "top relayer keystore pass word",
 			},
 		},
 	}
@@ -46,7 +46,6 @@ func main() {
 
 func start(c *cli.Context) error {
 	wg := new(sync.WaitGroup)
-
 	handlercfg, err := config.InitHeaderSyncConfig(c.String("config"))
 	if err != nil {
 		return err
@@ -63,7 +62,7 @@ func start(c *cli.Context) error {
 func getchainpass(c *cli.Context, handlercfg *config.HeaderSyncConfig) map[uint64]string {
 	chainpass := make(map[uint64]string)
 	for _, chain := range handlercfg.Config.Chains {
-		switch chain.ChainId_to {
+		switch chain.SubmitChainId {
 		case base.ETH:
 			chainpass[base.ETH] = c.String("epass")
 		case base.TOP:

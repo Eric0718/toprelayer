@@ -17,7 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-func NewWallet(url, path, pass string, chainid uint64) (interface{}, error) {
+func NewWallet(url, path, pass string, chainid uint64) (IWallet, error) {
 	sdk, err := sdk.NewSDK(url)
 	if err != nil {
 		return nil, err
@@ -135,7 +135,7 @@ func (w *Wallet) SendTransaction(ctx context.Context, tx *types.Transaction) err
 }
 
 /*to create chains wallet...*/
-func (w *Wallet) createChainWallet(ID uint64) (interface{}, error) {
+func (w *Wallet) createChainWallet(ID uint64) (IWallet, error) {
 	switch ID {
 	case base.ETH:
 		return w, nil

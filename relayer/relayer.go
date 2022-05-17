@@ -13,8 +13,8 @@ import (
 )
 
 type IChainRelayer interface {
-	Init(fromUrl, toUrl, keypath, pass string, chainid uint64, contract common.Address, batch, cert int) error
-	StartSubmitting(*sync.WaitGroup) error
+	Init(fromUrl, toUrl, keypath, pass string, chainid uint64, contract common.Address, batch, cert int, verify bool) error
+	StartRelayer(*sync.WaitGroup) error
 	ChainId() uint64
 }
 
@@ -30,9 +30,9 @@ func StartRelayer(wg *sync.WaitGroup, handlercfg *config.HeaderSyncConfig, chain
 func GetRelayer(chain uint64) (relayer IChainRelayer) {
 	switch chain {
 	case base.ETH:
-		relayer = new(top2eth.Top2Eth)
+		relayer = new(top2eth.Top2EthRelayer)
 	case base.TOP:
-		relayer = new(eth2top.Eth2Top)
+		relayer = new(eth2top.Eth2TopRelayer)
 	default:
 		logger.Error("Unsupport chain id:", chain)
 	}

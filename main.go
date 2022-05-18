@@ -64,9 +64,9 @@ func getchainpass(c *cli.Context, handlercfg *config.HeaderSyncConfig) map[uint6
 	for _, chain := range handlercfg.Config.Chains {
 		switch chain.SubmitChainId {
 		case base.ETH:
-			chainpass[base.ETH] = c.String("epass")
+			chainpass[base.ETH] = c.String("ethpass")
 		case base.TOP:
-			chainpass[base.TOP] = c.String("tpass")
+			chainpass[base.TOP] = c.String("toppass")
 		}
 	}
 	return chainpass

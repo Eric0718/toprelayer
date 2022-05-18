@@ -60,6 +60,7 @@ type ChainsConfig struct {
 	BlockCertainty int    `json:"blockcertainty"`
 	SubBatch       int    `json:"subBatch"`
 	VerifyBlock    bool   `json:"verifyblock"`
+	Start          bool   `json:"start"`
 }
 
 type HeaderSyncConfig struct {

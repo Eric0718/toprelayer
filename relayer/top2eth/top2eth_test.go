@@ -12,7 +12,7 @@ const SUBMITTERURL string = "http://192.168.30.32:8545"
 
 var DEFAULTPATH = "../../.relayer/wallet/eth"
 
-var CONTRACT common.Address = common.HexToAddress("0xb12138ce2c9e801f28c66b08bd8a2fd27fa50b89")
+var CONTRACT common.Address = common.HexToAddress("0xf04e16dae6887e8cf235f0179b50e0cd1860647c")
 
 func TestSubmitHeader(t *testing.T) {
 	sub := new(Top2EthRelayer)
@@ -27,6 +27,8 @@ func TestSubmitHeader(t *testing.T) {
 	}
 	data, _ := msg.EncodeHeader(headers)
 	nonce, _ := sub.wallet.GetNonce(sub.wallet.CurrentAccount().Address)
+
+	t.Logf("account:%v,nonce:%v\n", sub.wallet.CurrentAccount().Address, nonce)
 	tx, err := sub.submitTopHeader(data, nonce)
 	if err != nil {
 		t.Fatal("SubmitHeader error:", err)

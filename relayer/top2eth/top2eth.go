@@ -14,7 +14,6 @@ import (
 	"toprelayer/util"
 	"toprelayer/wallet"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -23,7 +22,7 @@ import (
 
 const (
 	METHOD_GETCURRENTBLOCKHEIGHT        = "getCurrentBlockHeight"
-	SUBMITINTERVAL               int64  = 1000
+	SUBMITINTERVAL               int64  = 10 //mainnet 1000
 	ERRDELAY                     int64  = 18
 	CONFIRMSUCCESS               string = "0x1"
 )
@@ -68,12 +67,12 @@ func (te *Top2EthRelayer) ChainId() uint64 {
 }
 
 func (te *Top2EthRelayer) submitTopHeader(headers []byte, nonce uint64) (*types.Transaction, error) {
-	logger.Info("submitHeader header length:%v,chainid:%v", len(headers), te.chainId)
+	logger.Info("submitTopHeader length:%v,chainid:%v", len(headers), te.chainId)
 	gaspric, err := te.wallet.GasPrice(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	msg := ethereum.CallMsg{
+	/* msg := ethereum.CallMsg{
 		From:     te.wallet.CurrentAccount().Address,
 		To:       &te.contract,
 		GasPrice: gaspric,
@@ -85,10 +84,10 @@ func (te *Top2EthRelayer) submitTopHeader(headers []byte, nonce uint64) (*types.
 	if err != nil {
 		fmt.Println("EstimateGas error:", err)
 		return nil, err
-	}
+	} */
 
 	//test mock
-	//gaslimit := uint64(300000)
+	gaslimit := uint64(500000)
 
 	balance, err := te.wallet.GetBalance()
 	if err != nil {
@@ -116,31 +115,31 @@ func (te *Top2EthRelayer) submitTopHeader(headers []byte, nonce uint64) (*types.
 		GasLimit: gaslimit,
 		Signer:   te.signTransaction,
 		Context:  context.Background(),
-		NoSend:   true, //false: Send the transaction to the target chain by default; true: don't send
+		NoSend:   true,
 	}
 
 	contractcaller, err := hsc.NewHscTransactor(te.contract, te.ethsdk)
 	if err != nil {
-		logger.Error("NewBridgeTransactor:", err)
+		logger.Error("Top2EthRelayer NewBridgeTransactor:", err)
 		return nil, err
 	}
 
 	sigTx, err := contractcaller.SyncBlockHeader(ops, headers)
 	if err != nil {
-		logger.Error("AddLightClientBlock error:", err)
+		logger.Error("Top2EthRelayer AddLightClientBlock error:", err)
 		return nil, err
 	}
 
 	if ops.NoSend {
 		err = util.VerifyEthSignature(sigTx)
 		if err != nil {
-			logger.Error("VerifyEthSignature error:", err)
+			logger.Error("Top2EthRelayer VerifyEthSignature error:", err)
 			return nil, err
 		}
 
 		err := te.ethsdk.SendTransaction(ops.Context, sigTx)
 		if err != nil {
-			logger.Error("SendTransaction error:", err)
+			logger.Error("Top2EthRelayer SendTransaction error:", err)
 			return nil, err
 		}
 	}
@@ -160,7 +159,7 @@ func (te *Top2EthRelayer) signTransaction(addr common.Address, tx *types.Transac
 	return nil, fmt.Errorf("address:%v not available", addr)
 }
 
-func (te *Top2EthRelayer) getTopBridgeState() (*msg.BridgeState, error) {
+func (te *Top2EthRelayer) getEthBridgeState() (*msg.BridgeState, error) {
 	hscaller, err := hsc.NewHscCaller(te.contract, te.ethsdk)
 	if err != nil {
 		return nil, err
@@ -186,12 +185,18 @@ func (te *Top2EthRelayer) StartRelayer(wg *sync.WaitGroup) error {
 	defer wg.Done()
 
 	var submitDelay int64 = 1
-	var syncStartHeight uint64 = 0
+	var syncStartHeight uint64 = 1
+
+	//test mock
+	var topConfirmedBlockHeight uint64 = 1000
 	for {
-		bridgeState, err := te.getTopBridgeState()
+		time.Sleep(time.Second * time.Duration(SUBMITINTERVAL*submitDelay))
+		//time.Sleep(time.Second * 2)
+
+		/* bridgeState, err := te.getEthBridgeState()
 		if err != nil {
 			logger.Error(err)
-			return err
+			continue
 		}
 
 		if bridgeState.ConfirmState == CONFIRMSUCCESS {
@@ -204,38 +209,38 @@ func (te *Top2EthRelayer) StartRelayer(wg *sync.WaitGroup) error {
 		topCurrentHeight, err := te.topsdk.GetLatestTopElectBlockHeight()
 		if err != nil {
 			logger.Error(err)
-			return err
+			continue
 		}
-		chainConfirmedBlockHeight := topCurrentHeight - 2 - uint64(te.certaintyBlocks)
-
-		if syncStartHeight <= chainConfirmedBlockHeight {
-			hashes, err := te.signAndSendTransactions(syncStartHeight, chainConfirmedBlockHeight)
+		topConfirmedBlockHeight := topCurrentHeight - 2 - uint64(te.certaintyBlocks)
+		*/
+		//if syncStartHeight <= topConfirmedBlockHeight {
+		hashes, err := te.signAndSendTransactions(syncStartHeight, topConfirmedBlockHeight)
+		if len(hashes) > 0 {
+			submitDelay = int64(len(hashes))
+		}
+		if err != nil {
+			logger.Error("Top2EthRelayer signAndSendTransactions failed:%v,delay:%v", err, SUBMITINTERVAL*submitDelay)
 			if len(hashes) > 0 {
-				logger.Info("sent hashes:", hashes)
-				submitDelay = int64(len(hashes))
+				continue
 			}
-			if err != nil {
-				logger.Error("signAndSendTransactions failed:%v,delay:%v", err, SUBMITINTERVAL*submitDelay)
-				submitDelay = ERRDELAY
-			}
-		} else {
-			submitDelay = 1
+			submitDelay = ERRDELAY
 		}
-		//time.Sleep(time.Second * time.Duration(SUBMITINTERVAL*submitDelay))
-		time.Sleep(time.Second * 2)
+		// } else {
+		// 	submitDelay = 1
+		// }
 	}
 }
 
 func (te *Top2EthRelayer) batch(headers []*msg.TopElectBlockHeader, nonce uint64) (common.Hash, error) {
 	data, err := msg.EncodeHeaders(headers)
 	if err != nil {
-		logger.Error("RlpEncodeHeaders failed:", err)
+		logger.Error("Top2EthRelayer EncodeHeaders failed:", err)
 		return common.Hash{}, err
 	}
 
 	tx, err := te.submitTopHeader(data, nonce)
 	if err != nil {
-		logger.Error("submitHeaders failed:", err)
+		logger.Error("Top2EthRelayer submitHeaders failed:", err)
 		return common.Hash{}, err
 	}
 	return tx.Hash(), nil
@@ -248,38 +253,38 @@ func (te *Top2EthRelayer) signAndSendTransactions(lo, hi uint64) ([]common.Hash,
 	if err != nil {
 		return hashes, err
 	}
-	nums := (hi - lo + 1) / uint64(te.subBatch)
 
-	for i := lo; i <= hi; i++ {
-		header, err := te.topsdk.GetTopElectBlockHeadByHeight(i, topsdk.ElectBlock_Current)
+	h := lo
+	for ; h <= hi; h++ {
+		/* header, err := te.topsdk.GetTopElectBlockHeadByHeight(h, topsdk.ElectBlock_Current)
 		if err != nil {
 			logger.Error(err)
 			return hashes, err
-		}
+		} */
+		//test mock
+		header := &msg.TopElectBlockHeader{BlockNumber: uint64(h)}
+
 		batchHeaders = append(batchHeaders, header)
-		if nums > 0 {
-			if len(batchHeaders) == te.subBatch {
-				hash, err := te.batch(batchHeaders, nonce)
-				if err != nil {
-					return hashes, err
-				}
-				batchHeaders = []*msg.TopElectBlockHeader{}
-				hashes = append(hashes, hash)
-				nonce++
-				nums--
-				continue
+		if (h-lo+1)%uint64(te.subBatch) == 0 {
+			hash, err := te.batch(batchHeaders, nonce)
+			if err != nil {
+				return hashes, err
 			}
-		}
-		if nums == 0 {
-			if len(batchHeaders) > 0 {
-				hash, err := te.batch(batchHeaders, nonce)
-				if err != nil {
-					return hashes, err
-				}
-				batchHeaders = []*msg.TopElectBlockHeader{}
-				hashes = append(hashes, hash)
-			}
+			batchHeaders = []*msg.TopElectBlockHeader{}
+			hashes = append(hashes, hash)
+			nonce++
 		}
 	}
+	if h > hi {
+		if len(batchHeaders) > 0 {
+			hash, err := te.batch(batchHeaders, nonce)
+			if err != nil {
+				return hashes, err
+			}
+			batchHeaders = []*msg.TopElectBlockHeader{}
+			hashes = append(hashes, hash)
+		}
+	}
+
 	return hashes, nil
 }

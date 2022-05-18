@@ -22,7 +22,7 @@ import (
 
 const (
 	METHOD_GETBRIDGESTATE        = "getbridgestate"
-	SUBMITINTERVAL        int64  = 1000
+	SUBMITINTERVAL        int64  = 120
 	ERRDELAY              int64  = 18
 	CONFIRMSUCCESS        string = "0x1"
 )
@@ -69,7 +69,7 @@ func (et *Eth2TopRelayer) ChainId() uint64 {
 }
 
 func (et *Eth2TopRelayer) submitEthHeader(header []byte, nonce uint64) (*types.Transaction, error) {
-	logger.Debug("submitEthHeader header length:%v,chainid:%v", len(header), et.chainId)
+	logger.Debug("submitEthHeader length:%v,chainid:%v", len(header), et.chainId)
 	gaspric, err := et.wallet.GasPrice(context.Background())
 	if err != nil {
 		return nil, err
@@ -118,20 +118,20 @@ func (et *Eth2TopRelayer) submitEthHeader(header []byte, nonce uint64) (*types.T
 
 	sigTx, err := contractcaller.AddLightClientBlock(ops, header)
 	if err != nil {
-		logger.Error("AddLightClientBlock:%v", err)
+		logger.Error("Eth2TopRelayer AddLightClientBlock:%v", err)
 		return nil, err
 	}
 
 	if ops.NoSend {
 		err = util.VerifyEthSignature(sigTx)
 		if err != nil {
-			logger.Error("VerifyEthSignature:%v", err)
+			logger.Error("Eth2TopRelayer VerifyEthSignature:%v", err)
 			return nil, err
 		}
 
 		err := et.topsdk.SendTransaction(ops.Context, sigTx)
 		if err != nil {
-			logger.Error("SendTransaction:%v", err)
+			logger.Error("Eth2TopRelayer SendTransaction:%v", err)
 			return nil, err
 		}
 	}
@@ -172,48 +172,53 @@ func (et *Eth2TopRelayer) getTopBridgeState() (*msg.BridgeState, error) {
 }
 
 func (et *Eth2TopRelayer) StartRelayer(wg *sync.WaitGroup) error {
-	logger.Info("Start Eth2Toprelayer... chainid:%v", et.chainId)
+	logger.Info("Start Eth2TopRelayer... chainid:%v", et.chainId)
 	defer wg.Done()
 
 	var submitDelay int64 = 1
-
-	//test mock
-	var syncStartHeight uint64 = 0
+	var syncStartHeight uint64 = 1
 	for {
-		bridgeState, err := et.getTopBridgeState()
+		//time.Sleep(time.Second * time.Duration(SUBMITINTERVAL*submitDelay))
+		time.Sleep(time.Second * 20)
+
+		/* bridgeState, err := et.getTopBridgeState()
 		if err != nil {
 			logger.Error(err)
-			return err
+			continue
 		}
 		if bridgeState.ConfirmState == CONFIRMSUCCESS {
 			syncStartHeight = bridgeState.LatestSyncedHeight.Uint64() + 1
 		} else {
 			logger.Warn("top bridge confirm eth header failed,height:%v.", bridgeState.LatestConfirmedHeight.Uint64())
 			syncStartHeight = bridgeState.LatestConfirmedHeight.Uint64()
-		}
+		} */
 
 		ethCurrentHeight, err := et.ethsdk.BlockNumber(context.Background())
 		if err != nil {
 			logger.Error(err)
-			return err
+			continue
 		}
-		chainConfirmedBlockHeight := ethCurrentHeight - uint64(et.certaintyBlocks)
+		ethConfirmedBlockHeight := ethCurrentHeight - uint64(et.certaintyBlocks)
 
-		if syncStartHeight <= chainConfirmedBlockHeight {
-			hashes, err := et.signAndSendTransactions(syncStartHeight, chainConfirmedBlockHeight)
+		logger.Debug("syncStartHeight:%v,ethCurrentHeight:%v,certaintyBlocks:%v,ethConfirmedBlockHeight:%v", syncStartHeight, ethCurrentHeight, et.certaintyBlocks, ethConfirmedBlockHeight)
+		if syncStartHeight <= ethConfirmedBlockHeight {
+			hashes, err := et.signAndSendTransactions(syncStartHeight, ethConfirmedBlockHeight)
 			if len(hashes) > 0 {
 				logger.Info("sent hashes:", hashes)
 				submitDelay = int64(len(hashes))
 			}
 			if err != nil {
-				logger.Error("signAndSendTransactions failed:%v,delay:%v", err, SUBMITINTERVAL*submitDelay)
+				logger.Error("Eth2TopRelayer signAndSendTransactions failed:%v,delay:%v", err, SUBMITINTERVAL*submitDelay)
+				if len(hashes) > 0 {
+					continue
+				}
 				submitDelay = ERRDELAY
 			}
 		} else {
 			submitDelay = 1
 		}
-		//time.Sleep(time.Second * time.Duration(SUBMITINTERVAL*submitDelay))
-		time.Sleep(time.Second * 5)
+		//test mock
+		syncStartHeight = ethConfirmedBlockHeight + 1
 	}
 }
 
@@ -225,14 +230,15 @@ func (et *Eth2TopRelayer) batch(headers []*types.Header, nonce uint64) (common.H
 	}
 	data, err := msg.EncodeHeaders(headers)
 	if err != nil {
-		logger.Error("RlpEncodeHeaders failed:", err)
+		logger.Error("Eth2TopRelayer EncodeHeaders failed:", err)
 		return common.Hash{}, err
 	}
 	tx, err := et.submitEthHeader(data, nonce)
 	if err != nil {
-		logger.Error("submitHeaders failed:", err)
+		logger.Error("Eth2TopRelayer submitHeaders failed:", err)
 		return common.Hash{}, err
 	}
+	logger.Debug("nonce:%v,hash:%v", nonce, tx.Hash())
 	return tx.Hash(), nil
 }
 
@@ -243,37 +249,34 @@ func (et *Eth2TopRelayer) signAndSendTransactions(lo, hi uint64) ([]common.Hash,
 	if err != nil {
 		return hashes, err
 	}
-	nums := (hi - lo + 1) / uint64(et.subBatch)
 
-	for i := lo; i <= hi; i++ {
-		header, err := et.topsdk.HeaderByNumber(context.Background(), big.NewInt(0).SetUint64(i))
+	h := lo
+	for ; h <= hi; h++ {
+		header, err := et.ethsdk.HeaderByNumber(context.Background(), big.NewInt(0).SetUint64(h))
 		if err != nil {
 			logger.Error(err)
 			return hashes, err
 		}
 		batchHeaders = append(batchHeaders, header)
-		if nums > 0 {
-			if len(batchHeaders) == et.subBatch {
-				hash, err := et.batch(batchHeaders, nonce)
-				if err != nil {
-					return hashes, err
-				}
-				batchHeaders = []*types.Header{}
-				hashes = append(hashes, hash)
-				nonce++
-				nums--
-				continue
+		if (h-lo+1)%uint64(et.subBatch) == 0 {
+			hash, err := et.batch(batchHeaders, nonce)
+			if err != nil {
+				return hashes, err
 			}
+			batchHeaders = []*types.Header{}
+			hashes = append(hashes, hash)
+			nonce++
 		}
-		if nums == 0 {
-			if len(batchHeaders) > 0 {
-				hash, err := et.batch(batchHeaders, nonce)
-				if err != nil {
-					return hashes, err
-				}
-				batchHeaders = []*types.Header{}
-				hashes = append(hashes, hash)
+	}
+	logger.Debug("check h:%v,hi:%v,len batchHeaders:%v", h, hi, len(batchHeaders))
+	if h > hi {
+		if len(batchHeaders) > 0 {
+			hash, err := et.batch(batchHeaders, nonce)
+			if err != nil {
+				return hashes, err
 			}
+			batchHeaders = []*types.Header{}
+			hashes = append(hashes, hash)
 		}
 	}
 	return hashes, nil

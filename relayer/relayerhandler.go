@@ -38,8 +38,8 @@ func (h *HeaderSyncHandler) Init(wg *sync.WaitGroup, chainpass map[uint64]string
 			chainpass[chain.SubmitChainId],
 			chain.SubmitChainId,
 			common.HexToAddress(chain.Contract),
-			chain.BlockCertainty,
 			chain.SubBatch,
+			chain.BlockCertainty,
 			chain.VerifyBlock,
 		)
 		if err != nil {
@@ -52,11 +52,13 @@ func (h *HeaderSyncHandler) Init(wg *sync.WaitGroup, chainpass map[uint64]string
 func (h *HeaderSyncHandler) StartRelayer() (err error) {
 	h.wg.Add(len(h.conf.Config.Chains))
 	for _, chain := range h.conf.Config.Chains {
-		go func() {
-			err = h.relayers[chain.SubmitChainId].StartRelayer(h.wg)
-		}()
-		if err != nil {
-			return err
+		if chain.Start {
+			go func() {
+				err = h.relayers[chain.SubmitChainId].StartRelayer(h.wg)
+			}()
+			if err != nil {
+				return err
+			}
 		}
 		time.Sleep(time.Second * 5)
 	}

@@ -3,7 +3,6 @@ package util
 import (
 	"fmt"
 	"math/big"
-	"strconv"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -27,20 +26,11 @@ func DecodeRawTx(rawTx string) (*types.Transaction, error) {
 }
 
 func Uint64ToHexString(val uint64) string {
-	return fmt.Sprintf("0x%X", val)
+	return hexutil.EncodeUint64(val)
 }
 
 func HexToUint64(hxs string) (uint64, error) {
-	if len(hxs) > 2 {
-		if hxs[:2] == "0x" {
-			hxs = hxs[2:]
-		}
-	}
-	n, err := strconv.ParseUint(hxs, 16, 64)
-	if err != nil {
-		return 0, err
-	}
-	return n, nil
+	return hexutil.DecodeUint64(hxs)
 }
 
 func zeroBytes() []byte {

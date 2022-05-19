@@ -22,9 +22,12 @@ import (
 
 const (
 	METHOD_GETCURRENTBLOCKHEIGHT        = "getCurrentBlockHeight"
-	SUBMITINTERVAL               int64  = 10 //mainnet 1000
-	ERRDELAY                     int64  = 18
+	SUBMITINTERVAL               int64  = 2 //mainnet 1000
 	CONFIRMSUCCESS               string = "0x1"
+
+	FATALTIMEOUT int64 = 24 //hours
+	FORKDELAY    int64 = 10 //*SUBMITINTERVAL seconds
+	ERRDELAY     int64 = 10
 )
 
 type Top2EthRelayer struct {
@@ -184,50 +187,61 @@ func (te *Top2EthRelayer) StartRelayer(wg *sync.WaitGroup) error {
 	logger.Info("Start Top2EthRelayer relayer... chainid:%v", te.chainId)
 	defer wg.Done()
 
-	var submitDelay int64 = 1
 	var syncStartHeight uint64 = 1
 
 	//test mock
 	var topConfirmedBlockHeight uint64 = 1000
 	for {
-		time.Sleep(time.Second * time.Duration(SUBMITINTERVAL*submitDelay))
-		//time.Sleep(time.Second * 2)
+		select {
+		case <-time.After(time.Hour * time.Duration(FATALTIMEOUT)):
+			logger.Fatal("relayer fatal: %v hours time out.", FATALTIMEOUT)
+			return nil
+		default:
+			for {
+				time.Sleep(time.Second * time.Duration(ERRDELAY))
+				//time.Sleep(time.Second * 2)
 
-		/* bridgeState, err := te.getEthBridgeState()
-		if err != nil {
-			logger.Error(err)
-			continue
-		}
+				/* bridgeState, err := te.getEthBridgeState()
+				if err != nil {
+					logger.Error(err)
+					continue
+				}
 
-		if bridgeState.ConfirmState == CONFIRMSUCCESS {
-			syncStartHeight = bridgeState.LatestSyncedHeight.Uint64() + 1
-		} else {
-			logger.Warn("eth bridge confirm top header failed,height:%v.", bridgeState.LatestConfirmedHeight.Uint64()+1)
-			syncStartHeight = bridgeState.LatestConfirmedHeight.Uint64()
-		}
+				if bridgeState.ConfirmState == CONFIRMSUCCESS {
+					syncStartHeight = bridgeState.LatestSyncedHeight.Uint64() + 1
+				} else {
+					logger.Warn("eth bridge confirm top header failed,height:%v.", bridgeState.LatestConfirmedHeight.Uint64()+1)
+					syncStartHeight = bridgeState.LatestConfirmedHeight.Uint64()
+				}
 
-		topCurrentHeight, err := te.topsdk.GetLatestTopElectBlockHeight()
-		if err != nil {
-			logger.Error(err)
-			continue
-		}
-		topConfirmedBlockHeight := topCurrentHeight - 2 - uint64(te.certaintyBlocks)
-		*/
-		//if syncStartHeight <= topConfirmedBlockHeight {
-		hashes, err := te.signAndSendTransactions(syncStartHeight, topConfirmedBlockHeight)
-		if len(hashes) > 0 {
-			submitDelay = int64(len(hashes))
-		}
-		if err != nil {
-			logger.Error("Top2EthRelayer signAndSendTransactions failed:%v,delay:%v", err, SUBMITINTERVAL*submitDelay)
-			if len(hashes) > 0 {
-				continue
+				topCurrentHeight, err := te.topsdk.GetLatestTopElectBlockHeight()
+				if err != nil {
+					logger.Error(err)
+					continue
+				}
+				topConfirmedBlockHeight := topCurrentHeight - 2 - uint64(te.certaintyBlocks)
+				*/
+
+				//if syncStartHeight <= topConfirmedBlockHeight {
+				hashes, err := te.signAndSendTransactions(syncStartHeight, topConfirmedBlockHeight)
+				if len(hashes) > 0 {
+					logger.Info("Top2EthRelayer sent block header from %v to :%v", syncStartHeight, topConfirmedBlockHeight)
+					time.Sleep(time.Second * time.Duration(SUBMITINTERVAL*int64(len(hashes))))
+					//test mock
+					syncStartHeight = topConfirmedBlockHeight + 1
+					topConfirmedBlockHeight += 500
+					break
+				}
+				if err != nil {
+					logger.Error("Top2EthRelayer signAndSendTransactions failed:%v", err)
+					continue
+				}
+				// }
+				//eth fork?
+				//logger.Error("eth chain revert? syncStartHeight[%v] > topConfirmedBlockHeight[%v]", syncStartHeight, topConfirmedBlockHeight)
+				//time.Sleep(time.Hour * time.Duration(FORKDELAY))
 			}
-			submitDelay = ERRDELAY
 		}
-		// } else {
-		// 	submitDelay = 1
-		// }
 	}
 }
 
@@ -243,6 +257,7 @@ func (te *Top2EthRelayer) batch(headers []*msg.TopElectBlockHeader, nonce uint64
 		logger.Error("Top2EthRelayer submitHeaders failed:", err)
 		return common.Hash{}, err
 	}
+	logger.Debug("nonce:%v,hash:%v", nonce, tx.Hash())
 	return tx.Hash(), nil
 }
 

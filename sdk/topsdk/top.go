@@ -27,47 +27,10 @@ const (
 )
 
 const (
-	ETHGETTRANSACTIONBYHASH        = "eth_getTransactionByHash"
-	ETHGETTRANSACTIONRECEIPT       = "eth_getTransactionReceipt"
 	GETLATESTETTOPELECTBLOCKHEADER = "getLatestTopElectBlockHeader"
 	GETTOPELECTBLOCKHEADBYHEIGHT   = "getTopElectBlockHeadByHeight"
 	GETLATESTTOPELECTBLOCKHEIGHT   = "getLatestTopElectBlockHeight"
 )
-
-type Transaction struct {
-	BlockHash        common.Hash    `json:"blockHash"`
-	BlockNumber      string         `json:"blockNumber"`
-	From             common.Address `json:"from"`
-	Gas              string         `json:"gas"`
-	GasPrice         string         `json:"gasPrice"`
-	Hash             common.Hash    `json:"hash"`
-	Input            string         `json:"input"`
-	Nonce            string         `json:"nonce"`
-	To               common.Address `json:"to"`
-	TransactionIndex string         `json:"transactionIndex"`
-	Value            string         `json:"value"`
-	V                string         `json:"v"`
-	R                common.Hash    `json:"r"`
-	S                common.Hash    `json:"S"`
-}
-
-type TransactionReceipt struct {
-	BlockHash         common.Hash    `json:"blockHash"`
-	BlockNumber       string         `json:"blockNumber"`
-	ContractAddress   common.Address `json:"contractAddress"`
-	CumulativeGasUsed string         `json:"cumulativeGasUsed"`
-	From              common.Address `json:"from"`
-	GasUsed           string         `json:"gasUsed"`
-	Logs              []*types.Log   `json:"logs"`
-	LogsBloom         types.Bloom    `json:"logsBloom"`
-	Status            string         `json:"status"`
-	To                common.Address `json:"to"`
-
-	TransactionHash  common.Hash `json:"transactionHash"`
-	TransactionIndex string      `json:"transactionIndex"`
-
-	Root common.Hash `json:"root"`
-}
 
 func NewTopSdk(url string) (*TopSdk, error) {
 	sdk, err := sdk.NewSDK(url)
@@ -77,17 +40,8 @@ func NewTopSdk(url string) (*TopSdk, error) {
 	return &TopSdk{SDK: sdk, url: url}, nil
 }
 
-func (t *TopSdk) SaveEthBlockHead(rawTx string) (string, error) {
-	etx, err := util.DecodeRawTx(rawTx)
-	if err != nil {
-		return "", err
-	}
-	err = t.SendTransaction(context.Background(), etx)
-	if err != nil {
-		return "", err
-	}
-
-	return etx.Hash().Hex(), nil
+func (t *TopSdk) SendBlockHeadTransaction(ctx context.Context, btx *types.Transaction) error {
+	return t.SendTransaction(ctx, btx)
 }
 
 func (t *TopSdk) GetLatestTopElectBlockHeader() (*types.Block, error) {
@@ -110,27 +64,12 @@ func (t *TopSdk) getLatestTopElectBlockHeader() (*types.Block, error) {
 	return head, nil
 }
 
-func (t *TopSdk) GetTransactionByHash(hash common.Hash) (isPending bool, err error) {
-	var tx *Transaction
-	err = t.Rpc.CallContext(context.Background(), tx, ETHGETTRANSACTIONBYHASH, hash)
-	if err != nil {
-		return false, err
-	} else if tx == nil {
-		return false, ethereum.NotFound
-	}
-
-	return tx.BlockNumber == "", nil
+func (t *TopSdk) GetTransactionByHash(hash common.Hash) (tx *types.Transaction, isPending bool, err error) {
+	return t.TransactionByHash(context.Background(), hash)
 }
 
-func (t *TopSdk) GetTransactionReceipt(hash common.Hash) (*TransactionReceipt, error) {
-	var r *TransactionReceipt
-	err := t.Rpc.CallContext(context.Background(), &r, ETHGETTRANSACTIONRECEIPT, hash)
-	if err == nil {
-		if r == nil {
-			return nil, ethereum.NotFound
-		}
-	}
-	return r, err
+func (t *TopSdk) GetTransactionReceipt(hash common.Hash) (*types.Receipt, error) {
+	return t.TransactionReceipt(context.Background(), hash)
 }
 
 func (t *TopSdk) GetTopElectBlockHeadByHeight(height uint64, tag ElectBlockType) (*msg.TopElectBlockHeader, error) {
